@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -36,6 +37,7 @@ import Cardano.Ledger.Credential
 import Control.DeepSeq (NFData)
 import Control.Exception (assert)
 import Data.Aeson (ToJSON)
+import Data.Bifunctor (Bifunctor (..))
 import Data.Default (Default)
 import Data.Foldable (foldMap')
 import Data.Kind (Type)
@@ -175,34 +177,44 @@ lookupStakePoolDelegation cred accounts =
   lookupAccountState cred accounts
     >>= (^. stakePoolDelegationAccountStateL)
 
--- | This function returns `Nothing` iff all of the accounts that withdrawals are trying to drain are
--- indeed registered and all of the amounts in the withdrawals match the respective balances exactly.
+-- | This function returns `Nothing` iff all of the accounts that withdrawals
+-- are trying to drain are indeed registered and all of the amounts in the
+-- withdrawals match the respective balances exactly. It returns a 2-tuple where
+-- the `fst` is withdrawals with missing reward accounts or the wrong network,
+-- and `snd` is incomplete withdrawals.
+--
+-- NOTE: We simply `checkBadWithdrawals` to avoid allocating new variables for
+-- the most likely case.
 withdrawalsThatDoNotDrainAccounts ::
   EraAccounts era =>
   Withdrawals ->
   Network ->
   Accounts era ->
-  Maybe Withdrawals
-withdrawalsThatDoNotDrainAccounts (Withdrawals withdrawalsMap) networkId accounts
-  -- @withdrawalsMap@ is small and @accountsMap@ big, better to traverse the former than the latter.
-  | Map.foldrWithKey checkAllValidWithdrawals True withdrawalsMap =
-      Nothing
-  | otherwise =
-      Just $ Withdrawals $ Map.foldrWithKey collectInvalidWithdrawals Map.empty withdrawalsMap
+  -- | invalid withdrawal = that which does not have a reward account or is in
+  -- the wrong network.
+  -- incomplete withdrawal = that which does not withdraw the exact account
+  -- balance.
+  Maybe (Map RewardAccount Coin, Map RewardAccount Coin)
+withdrawalsThatDoNotDrainAccounts (Withdrawals withdrawals) networkId accounts
+  -- @withdrawals@ is small and @accounts@ big, better to traverse the former than the latter.
+  | Map.foldrWithKey checkBadWithdrawals True withdrawals = Nothing
+  | otherwise = Just $ Map.foldrWithKey collectBadWithdrawals (Map.empty, Map.empty) withdrawals
   where
-    accountsMap = accounts ^. accountsMapL
-    checkAllValidWithdrawals rewardAccount withdrawalAmount noBadWithdrawals =
-      noBadWithdrawals && isValidWithdrawal rewardAccount withdrawalAmount
-    collectInvalidWithdrawals rewardAccount withdrawalAmount badWithdrawals
-      | isValidWithdrawal rewardAccount withdrawalAmount = badWithdrawals
-      | otherwise = Map.insert rewardAccount withdrawalAmount badWithdrawals
-    isValidWithdrawal RewardAccount {raCredential, raNetwork} withdrawalAmount
-      | raNetwork == networkId
-      , Just accountState <- Map.lookup raCredential accountsMap
-      , withdrawalAmount == fromCompact (accountState ^. balanceAccountStateL) =
-          True
-      | otherwise =
-          False
+    checkBadWithdrawals rewardAccount withdrawalAmount noBadWithdrawals =
+      noBadWithdrawals && isGoodWithdrawal rewardAccount withdrawalAmount
+    collectBadWithdrawals rewardAccount withdrawalAmount accum@(!_, !_) =
+      case isBalanceZero withdrawalAmount <$> lookupAccount rewardAccount of
+        Nothing -> first (Map.insert rewardAccount withdrawalAmount) accum
+        Just False -> second (Map.insert rewardAccount withdrawalAmount) accum
+        Just True -> accum
+    isGoodWithdrawal rewardAccount withdrawalAmount
+      | Just accountState <- lookupAccount rewardAccount = isBalanceZero withdrawalAmount accountState
+      | otherwise = False
+    isBalanceZero withdrawalAmount accountState =
+      withdrawalAmount == fromCompact (accountState ^. balanceAccountStateL)
+    lookupAccount RewardAccount {raCredential, raNetwork}
+      | raNetwork == networkId = lookupAccountState raCredential accounts
+      | otherwise = Nothing
 
 -- | Reset balances to zero for all accounts that are specified in the supplied `Withdrawals`.
 --

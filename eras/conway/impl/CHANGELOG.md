@@ -2,7 +2,9 @@
 
 ## 1.20.0.1
 
-*
+* Move withdrawal-validation and DRep expiry updates from `CERTS` to `LEDGER` starting protocol version 11.
+  - Split withdrawal-validation predicate failures into `ConwayWithdrawalsMissingAccounts` and `ConwayIncompleteWithdrawals` to report failures better.
+  - Add `hardforkConwayMoveWithdrawalsAndDRepChecksToLedgerRule` to `Conway.Era`.
 
 ## 1.20.0.0
 
