@@ -30,16 +30,14 @@ import Cardano.Ledger.Dijkstra.Core
 import Cardano.Ledger.Dijkstra.Genesis (DijkstraGenesis (..))
 import Cardano.Ledger.Dijkstra.PParams (UpgradeDijkstraPParams (..))
 import Cardano.Ledger.Plutus (SLanguage (..))
-import Cardano.Ledger.Shelley.LedgerState
+import Cardano.Ledger.Shelley.LedgerState (epochStateGovStateL, nesEsL)
 import Cardano.Ledger.Shelley.Rules (ShelleyDelegPredFailure)
 import qualified Cardano.Ledger.Shelley.Rules as Shelley
 import Cardano.Ledger.State
 import Data.Maybe (fromJust)
-import qualified Data.Sequence.Strict as SSeq
-import Lens.Micro
+import Lens.Micro ((%~), (&))
 import Test.Cardano.Ledger.Conway.ImpTest
 import Test.Cardano.Ledger.Dijkstra.Era
-import Test.Cardano.Ledger.Imp.Common
 
 instance ShelleyEraImp DijkstraEra where
   initGenesis = pure exampleDijkstraGenesis
@@ -70,24 +68,7 @@ instance AlonzoEraImp DijkstraEra where
       <> plutusTestScripts SPlutusV2
       <> plutusTestScripts SPlutusV3
 
-instance ConwayEraImp DijkstraEra where
-  delegateToDRep cred stake dRep = do
-    deposit <- getsNES $ nesEsL . curPParamsEpochStateL . ppKeyDepositL
-    (_, spendingKP) <- freshKeyPair
-    let tx =
-          mkBasicTx mkBasicTxBody
-            & bodyTxL . outputsTxBodyL
-              .~ SSeq.singleton (mkBasicTxOut (mkAddr spendingKP cred) (inject stake))
-            & bodyTxL . certsTxBodyL
-              .~ SSeq.fromList
-                [ RegDepositDelegTxCert
-                    cred
-                    (DelegVote dRep)
-                    deposit
-                ]
-    submitTx_ tx
-    ra <- getRewardAccountFor cred
-    pure (spendingKP, ra)
+instance ConwayEraImp DijkstraEra
 
 class
   ( ConwayEraImp era
