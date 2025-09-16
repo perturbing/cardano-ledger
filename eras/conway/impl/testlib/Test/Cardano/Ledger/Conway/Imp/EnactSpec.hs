@@ -119,27 +119,31 @@ treasuryWithdrawalsSpec =
                    ]
       ensTreasury enactState'' `shouldBe` Coin 1
 
-    it "Withdrawals exceeding treasury submitted in a single proposal" $ whenPostBootstrap $ do
-      disableTreasuryExpansion
-      committeeCs <- registerInitialCommittee
-      (drepC, _, _) <- setupSingleDRep 1_000_000
-      initialTreasury <- getsNES treasuryL
-      numWithdrawals <- choose (1, 10)
-      withdrawals <- genWithdrawalsExceeding initialTreasury numWithdrawals
+    describe "Separated out for conformance mismatch" $ do
+      -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/911
+      -- TODO: Re-enable after issues are resolved, by removing this override
+      disableImpInitPostEpochBoundaryHook $ do
+        it "Withdrawals exceeding treasury submitted in a single proposal" $ whenPostBootstrap $ do
+          disableTreasuryExpansion
+          committeeCs <- registerInitialCommittee
+          (drepC, _, _) <- setupSingleDRep 1_000_000
+          initialTreasury <- getsNES treasuryL
+          numWithdrawals <- choose (1, 10)
+          withdrawals <- genWithdrawalsExceeding initialTreasury numWithdrawals
 
-      void $ enactTreasuryWithdrawals withdrawals drepC committeeCs
-      checkNoWithdrawal initialTreasury withdrawals
+          void $ enactTreasuryWithdrawals withdrawals drepC committeeCs
+          checkNoWithdrawal initialTreasury withdrawals
 
-      let sumRequested = foldMap snd withdrawals
+          let sumRequested = foldMap snd withdrawals
 
-      impAnn "Submit a treasury donation that can cover the withdrawals" $ do
-        let tx =
-              mkBasicTx mkBasicTxBody
-                & bodyTxL . treasuryDonationTxBodyL .~ (sumRequested <-> initialTreasury)
-        submitTx_ tx
-      passNEpochs 2
-      getsNES treasuryL `shouldReturn` zero
-      sumRewardAccounts withdrawals `shouldReturn` sumRequested
+          impAnn "Submit a treasury donation that can cover the withdrawals" $ do
+            let tx =
+                  mkBasicTx mkBasicTxBody
+                    & bodyTxL . treasuryDonationTxBodyL .~ (sumRequested <-> initialTreasury)
+            submitTx_ tx
+          passNEpochs 2
+          getsNES treasuryL `shouldReturn` zero
+          sumRewardAccounts withdrawals `shouldReturn` sumRequested
 
     it "Withdrawals exceeding maxBound Word64 submitted in a single proposal" $ whenPostBootstrap $ do
       disableTreasuryExpansion
@@ -151,39 +155,43 @@ treasuryWithdrawalsSpec =
       void $ enactTreasuryWithdrawals withdrawals drepC committeeCs
       checkNoWithdrawal initialTreasury withdrawals
 
-    it "Withdrawals exceeding treasury submitted in several proposals within the same epoch" $
-      whenPostBootstrap $ do
-        disableTreasuryExpansion
-        committeeCs <- registerInitialCommittee
-        (drepC, _, _) <- setupSingleDRep 1_000_000
-        donateToTreasury $ Coin 5_000_000
-        initialTreasury <- getsNES treasuryL
-        numWithdrawals <- choose (1, 10)
-        withdrawals <- genWithdrawalsExceeding initialTreasury numWithdrawals
+    describe "Separated out for conformance mismatch" $ do
+      -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/912
+      -- TODO: Re-enable after issues are resolved, by removing this override
+      disableImpInitPostEpochBoundaryHook $ do
+        it "Withdrawals exceeding treasury submitted in several proposals within the same epoch" $
+          whenPostBootstrap $ do
+            disableTreasuryExpansion
+            committeeCs <- registerInitialCommittee
+            (drepC, _, _) <- setupSingleDRep 1_000_000
+            donateToTreasury $ Coin 5_000_000
+            initialTreasury <- getsNES treasuryL
+            numWithdrawals <- choose (1, 10)
+            withdrawals <- genWithdrawalsExceeding initialTreasury numWithdrawals
 
-        impAnn "submit in individual proposals in the same epoch" $ do
-          traverse_
-            ( \w -> do
-                gaId <- submitTreasuryWithdrawals @era [w]
-                submitYesVote_ (DRepVoter drepC) gaId
-                submitYesVoteCCs_ committeeCs gaId
-            )
-            withdrawals
-          passNEpochs 2
+            impAnn "submit in individual proposals in the same epoch" $ do
+              traverse_
+                ( \w -> do
+                    gaId <- submitTreasuryWithdrawals @era [w]
+                    submitYesVote_ (DRepVoter drepC) gaId
+                    submitYesVoteCCs_ committeeCs gaId
+                )
+                withdrawals
+              passNEpochs 2
 
-          let expectedTreasury =
-                F.foldl'
-                  ( \acc (_, x) ->
-                      if acc >= x
-                        then acc <-> x
-                        else acc
-                  )
-                  initialTreasury
-                  withdrawals
+              let expectedTreasury =
+                    F.foldl'
+                      ( \acc (_, x) ->
+                          if acc >= x
+                            then acc <-> x
+                            else acc
+                      )
+                      initialTreasury
+                      withdrawals
 
-          getsNES treasuryL `shouldReturn` expectedTreasury
-          -- check that the sum of the rewards matches what was spent from the treasury
-          sumRewardAccounts withdrawals `shouldReturn` (initialTreasury <-> expectedTreasury)
+              getsNES treasuryL `shouldReturn` expectedTreasury
+              -- check that the sum of the rewards matches what was spent from the treasury
+              sumRewardAccounts withdrawals `shouldReturn` (initialTreasury <-> expectedTreasury)
   where
     sumRewardAccounts withdrawals = mconcat <$> traverse (getAccountBalance . fst) withdrawals
     genWithdrawalsExceeding (Coin val) n = do
