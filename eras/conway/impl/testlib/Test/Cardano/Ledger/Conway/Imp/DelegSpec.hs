@@ -477,155 +477,162 @@ spec = do
             .~ [UnRegDepositTxCert cred expectedDeposit]
       expectNotRegistered cred
       expectNotDelegatedVote cred
-    disableImpInitPostSubmitTxHook $
-      it "Delegate vote and unregister after hardfork" $ do
-        let
-          bootstrapVer = ProtVer (natVersion @9) 0
-          setProtVer pv = modifyNES $ nesEsL . curPParamsEpochStateL . ppProtocolVersionL .~ pv
-        initialProtVer <- getProtVer
-        (_, ccCred, _) <- impAnn "Set up a committee" $ do
-          -- Temporarily set protver to 10 to elect a committee
-          setProtVer $ ProtVer (natVersion @10) 0
-          res <- electBasicCommittee
-          setProtVer initialProtVer
-          pure res
-        (khSPO, _, _) <- setupPoolWithStake $ Coin 10_000_000
-        -- Using a lazy pattern match here to prevent evaluation of tuple
-        -- unless we actually need a value from it
-        ~(drepCred, _, _) <-
-          if initialProtVer > bootstrapVer
-            then setupSingleDRep 100_000_000
-            else pure $ error "drepCred should not be accessed before protver 10"
-        passNEpochs 3
-        expectedDeposit <- getsNES $ nesEsL . curPParamsEpochStateL . ppKeyDepositL
-        cred <- KeyHashObj <$> freshKeyHash
-        submitTx_ $
-          mkBasicTx mkBasicTxBody
-            & bodyTxL . certsTxBodyL
-              .~ [RegDepositDelegTxCert cred (DelegVote DRepAlwaysAbstain) expectedDeposit]
-        registerAndRetirePoolToMakeReward cred
-        expectRegistered cred
-        expectDelegatedVote cred DRepAlwaysAbstain
-        impAnn "Version should be unchanged" $
-          getProtVer `shouldReturn` initialProtVer
-        let nextVer = majorFollow initialProtVer
-        hfGaid <- submitGovAction $ HardForkInitiation SNothing nextVer
-        submitVote_ VoteYes (StakePoolVoter khSPO) hfGaid
-        submitVote_ VoteYes (CommitteeVoter ccCred) hfGaid
-        when (initialProtVer > bootstrapVer) $
-          submitVote_ VoteYes (DRepVoter drepCred) hfGaid
-        passNEpochs 3
-        logRatificationChecks hfGaid
-        impAnn "Version should be bumped" $
-          getProtVer `shouldReturn` nextVer
-        withdrawalAmount <- getsPParams ppPoolDepositL
-        rewardAccount <- getRewardAccountFor cred
-        submitTx_ $
-          mkBasicTx mkBasicTxBody
-            & bodyTxL . certsTxBodyL .~ [UnRegDepositTxCert cred expectedDeposit]
-            & bodyTxL . withdrawalsTxBodyL
-              .~ Withdrawals (Map.singleton rewardAccount withdrawalAmount)
-        expectNotRegistered cred
-        expectNotDelegatedVote cred
-    it "Delegate vote and undelegate after delegating to some stake pools" $ do
-      (khSPO, _, _) <- setupPoolWithStake $ Coin 1_000_000
-      expectedDeposit <- getsNES $ nesEsL . curPParamsEpochStateL . ppKeyDepositL
-      cred <- KeyHashObj <$> freshKeyHash
-      submitTx_ $
-        mkBasicTx mkBasicTxBody
-          & bodyTxL . certsTxBodyL
-            .~ [RegDepositDelegTxCert cred (DelegVote DRepAlwaysAbstain) expectedDeposit]
-      registerAndRetirePoolToMakeReward cred
-      expectRegistered cred
-      expectDelegatedVote cred DRepAlwaysAbstain
-      forM_ @[] [1 .. 3 :: Int] $ \_ -> do
-        submitTx_ $
-          mkBasicTx mkBasicTxBody
-            & bodyTxL . certsTxBodyL
-              .~ [DelegTxCert cred (DelegStake khSPO)]
-      passNEpochs 3
-      withdrawalAmount <- getsPParams ppPoolDepositL
-      rewardAccount <- getRewardAccountFor cred
-      submitTx_ $
-        mkBasicTx mkBasicTxBody
-          & bodyTxL . certsTxBodyL
-            .~ [UnRegDepositTxCert cred expectedDeposit]
-          & bodyTxL . withdrawalsTxBodyL
-            .~ Withdrawals (Map.singleton rewardAccount withdrawalAmount)
-      expectNotRegistered cred
-      expectNotDelegatedVote cred
-
-  describe "Delegate both stake and vote - separated out for conformance mismatch" $
-    -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/640
-    -- TODO: Re-enable after issue is resolved, by removing this override
-    disableImpInitPostSubmitTxHook $ do
-      it "Delegate, retire and re-register pool" $ do
-        expectedDeposit <- getsNES $ nesEsL . curPParamsEpochStateL . ppKeyDepositL
-        cred <- KeyHashObj <$> freshKeyHash
-        poolKh <- freshKeyHash
-        rewardAccount <- registerRewardAccountWithDeposit
-        registerPoolWithDeposit poolKh
-        drepCred <- KeyHashObj <$> registerDRep
-
-        submitTx_ $
-          mkBasicTx mkBasicTxBody
-            & bodyTxL . certsTxBodyL
-              .~ [ RegDepositDelegTxCert
-                     cred
-                     (DelegStakeVote poolKh (DRepCredential drepCred))
-                     expectedDeposit
-                 ]
-        expectDelegatedToPool cred poolKh
-        expectDelegatedVote cred (DRepCredential drepCred)
-
-        let poolLifetime = 2
-        let poolExpiry = getsNES nesELL <&> \n -> addEpochInterval n $ EpochInterval poolLifetime
-
-        poolExpiry >>= \pe ->
+    describe "Separated out for conformance mismatch" $ do
+      -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/917
+      -- TODO: Re-enable after issue is resolved, by removing this override
+      disableImpInitPostSubmitTxHook . disableImpInitPostEpochBoundaryHook $ do
+        it "Delegate vote and unregister after hardfork" $ do
+          let
+            bootstrapVer = ProtVer (natVersion @9) 0
+            setProtVer pv = modifyNES $ nesEsL . curPParamsEpochStateL . ppProtocolVersionL .~ pv
+          initialProtVer <- getProtVer
+          (_, ccCred, _) <- impAnn "Set up a committee" $ do
+            -- Temporarily set protver to 10 to elect a committee
+            setProtVer $ ProtVer (natVersion @10) 0
+            res <- electBasicCommittee
+            setProtVer initialProtVer
+            pure res
+          (khSPO, _, _) <- setupPoolWithStake $ Coin 10_000_000
+          -- Using a lazy pattern match here to prevent evaluation of tuple
+          -- unless we actually need a value from it
+          ~(drepCred, _, _) <-
+            if initialProtVer > bootstrapVer
+              then setupSingleDRep 100_000_000
+              else pure $ error "drepCred should not be accessed before protver 10"
+          passNEpochs 3
+          expectedDeposit <- getsNES $ nesEsL . curPParamsEpochStateL . ppKeyDepositL
+          cred <- KeyHashObj <$> freshKeyHash
           submitTx_ $
             mkBasicTx mkBasicTxBody
-              & bodyTxL . certsTxBodyL .~ [RetirePoolTxCert poolKh pe]
-
-        -- when pool is re-registered after its expiration, all delegations are cleared
-        passNEpochs $ fromIntegral poolLifetime
-        expectNotDelegatedToPool cred
-        registerPoolWithRewardAccount poolKh rewardAccount
-        expectNotDelegatedToPool cred
-        -- the vote delegation is kept
-        expectDelegatedVote cred (DRepCredential drepCred)
-
-        -- re-delegate
-        submitTx_ $
-          mkBasicTx mkBasicTxBody
-            & bodyTxL . certsTxBodyL
-              .~ [ DelegTxCert
-                     cred
-                     (DelegStake poolKh)
-                 ]
-        expectDelegatedToPool cred poolKh
-
-        -- when pool is re-registered before its expiration, delegations are kept
-        poolExpiry >>= \pe ->
+              & bodyTxL . certsTxBodyL
+                .~ [RegDepositDelegTxCert cred (DelegVote DRepAlwaysAbstain) expectedDeposit]
+          registerAndRetirePoolToMakeReward cred
+          expectRegistered cred
+          expectDelegatedVote cred DRepAlwaysAbstain
+          impAnn "Version should be unchanged" $
+            getProtVer `shouldReturn` initialProtVer
+          let nextVer = majorFollow initialProtVer
+          hfGaid <- submitGovAction $ HardForkInitiation SNothing nextVer
+          submitVote_ VoteYes (StakePoolVoter khSPO) hfGaid
+          submitVote_ VoteYes (CommitteeVoter ccCred) hfGaid
+          when (initialProtVer > bootstrapVer) $
+            submitVote_ VoteYes (DRepVoter drepCred) hfGaid
+          passNEpochs 3
+          logRatificationChecks hfGaid
+          impAnn "Version should be bumped" $
+            getProtVer `shouldReturn` nextVer
+          withdrawalAmount <- getsPParams ppPoolDepositL
+          rewardAccount <- getRewardAccountFor cred
           submitTx_ $
             mkBasicTx mkBasicTxBody
-              & bodyTxL . certsTxBodyL .~ [RetirePoolTxCert poolKh pe]
-        -- re-register the pool before the expiration time
-        passNEpochs $ fromIntegral poolLifetime - 1
-        registerPoolWithRewardAccount poolKh rewardAccount
-        expectDelegatedToPool cred poolKh
-        passNEpochs 2
-        expectDelegatedToPool cred poolKh
-
-        -- when pool is retired and re-registered in the same transaction, delegations are kept
-        pps <- freshPoolParams poolKh rewardAccount
-        poolExpiry >>= \pe ->
+              & bodyTxL . certsTxBodyL .~ [UnRegDepositTxCert cred expectedDeposit]
+              & bodyTxL . withdrawalsTxBodyL
+                .~ Withdrawals (Map.singleton rewardAccount withdrawalAmount)
+          expectNotRegistered cred
+          expectNotDelegatedVote cred
+    describe "Separated out for conformance mismatch" $ do
+      -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/916
+      -- TODO: Re-enable after issue is resolved, by removing this override
+      disableImpInitPostEpochBoundaryHook $ do
+        it "Delegate vote and undelegate after delegating to some stake pools" $ do
+          (khSPO, _, _) <- setupPoolWithStake $ Coin 1_000_000
+          expectedDeposit <- getsNES $ nesEsL . curPParamsEpochStateL . ppKeyDepositL
+          cred <- KeyHashObj <$> freshKeyHash
           submitTx_ $
             mkBasicTx mkBasicTxBody
-              & bodyTxL . certsTxBodyL .~ [RetirePoolTxCert poolKh pe, RegPoolTxCert pps]
+              & bodyTxL . certsTxBodyL
+                .~ [RegDepositDelegTxCert cred (DelegVote DRepAlwaysAbstain) expectedDeposit]
+          registerAndRetirePoolToMakeReward cred
+          expectRegistered cred
+          expectDelegatedVote cred DRepAlwaysAbstain
+          forM_ @[] [1 .. 3 :: Int] $ \_ -> do
+            submitTx_ $
+              mkBasicTx mkBasicTxBody
+                & bodyTxL . certsTxBodyL
+                  .~ [DelegTxCert cred (DelegStake khSPO)]
+          passNEpochs 3
+          withdrawalAmount <- getsPParams ppPoolDepositL
+          rewardAccount <- getRewardAccountFor cred
+          submitTx_ $
+            mkBasicTx mkBasicTxBody
+              & bodyTxL . certsTxBodyL
+                .~ [UnRegDepositTxCert cred expectedDeposit]
+              & bodyTxL . withdrawalsTxBodyL
+                .~ Withdrawals (Map.singleton rewardAccount withdrawalAmount)
+          expectNotRegistered cred
+          expectNotDelegatedVote cred
 
-        expectDelegatedToPool cred poolKh
-        passNEpochs $ fromIntegral poolLifetime
-        expectDelegatedToPool cred poolKh
+    describe "Separated out for conformance mismatch" $
+      -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/640
+      -- TODO: Re-enable after issue is resolved, by removing this override
+      disableImpInitPostSubmitTxHook . disableImpInitPostEpochBoundaryHook $ do
+        it "Delegate, retire and re-register pool" $ do
+          expectedDeposit <- getsNES $ nesEsL . curPParamsEpochStateL . ppKeyDepositL
+          cred <- KeyHashObj <$> freshKeyHash
+          poolKh <- freshKeyHash
+          rewardAccount <- registerRewardAccountWithDeposit
+          registerPoolWithDeposit poolKh
+          drepCred <- KeyHashObj <$> registerDRep
+
+          submitTx_ $
+            mkBasicTx mkBasicTxBody
+              & bodyTxL . certsTxBodyL
+                .~ [ RegDepositDelegTxCert
+                       cred
+                       (DelegStakeVote poolKh (DRepCredential drepCred))
+                       expectedDeposit
+                   ]
+          expectDelegatedToPool cred poolKh
+          expectDelegatedVote cred (DRepCredential drepCred)
+
+          let poolLifetime = 2
+          let poolExpiry = getsNES nesELL <&> \n -> addEpochInterval n $ EpochInterval poolLifetime
+
+          poolExpiry >>= \pe ->
+            submitTx_ $
+              mkBasicTx mkBasicTxBody
+                & bodyTxL . certsTxBodyL .~ [RetirePoolTxCert poolKh pe]
+
+          -- when pool is re-registered after its expiration, all delegations are cleared
+          passNEpochs $ fromIntegral poolLifetime
+          expectNotDelegatedToPool cred
+          registerPoolWithRewardAccount poolKh rewardAccount
+          expectNotDelegatedToPool cred
+          -- the vote delegation is kept
+          expectDelegatedVote cred (DRepCredential drepCred)
+
+          -- re-delegate
+          submitTx_ $
+            mkBasicTx mkBasicTxBody
+              & bodyTxL . certsTxBodyL
+                .~ [ DelegTxCert
+                       cred
+                       (DelegStake poolKh)
+                   ]
+          expectDelegatedToPool cred poolKh
+
+          -- when pool is re-registered before its expiration, delegations are kept
+          poolExpiry >>= \pe ->
+            submitTx_ $
+              mkBasicTx mkBasicTxBody
+                & bodyTxL . certsTxBodyL .~ [RetirePoolTxCert poolKh pe]
+          -- re-register the pool before the expiration time
+          passNEpochs $ fromIntegral poolLifetime - 1
+          registerPoolWithRewardAccount poolKh rewardAccount
+          expectDelegatedToPool cred poolKh
+          passNEpochs 2
+          expectDelegatedToPool cred poolKh
+
+          -- when pool is retired and re-registered in the same transaction, delegations are kept
+          pps <- freshPoolParams poolKh rewardAccount
+          poolExpiry >>= \pe ->
+            submitTx_ $
+              mkBasicTx mkBasicTxBody
+                & bodyTxL . certsTxBodyL .~ [RetirePoolTxCert poolKh pe, RegPoolTxCert pps]
+
+          expectDelegatedToPool cred poolKh
+          passNEpochs $ fromIntegral poolLifetime
+          expectDelegatedToPool cred poolKh
   describe "Delegate both stake and vote" $ do
     it "Delegate and unregister credentials" $ do
       expectedDeposit <- getsNES $ nesEsL . curPParamsEpochStateL . ppKeyDepositL
