@@ -729,7 +729,7 @@ conwayEraSpecificSpec = do
   describe "Register stake credential" $ do
     it "Without any deposit" $ do
       cred <- KeyHashObj <$> freshKeyHash
-      regTxCert <- genRegTxCert cred
+      let regTxCert = RegTxCert cred
       submitTx_ $
         mkBasicTx mkBasicTxBody
           & bodyTxL . certsTxBodyL .~ [regTxCert]
