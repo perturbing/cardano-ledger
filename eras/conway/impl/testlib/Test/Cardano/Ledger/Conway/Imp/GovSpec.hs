@@ -604,91 +604,95 @@ proposalsSpec = do
           `shouldReturn` Node (SJust p212) []
         props <- getProposals
         proposalsSize props `shouldBe` 0
-      it "Subtrees are pruned for both enactment and expiry over multiple rounds" $ whenPostBootstrap $ do
-        committeeMembers' <- registerInitialCommittee
-        (dRep, _, _) <- setupSingleDRep 1_000_000
-        modifyPParams $ ppGovActionLifetimeL .~ EpochInterval 4
-        [ a@( Node
-                p1
-                [ b@( Node
-                        p11
-                        [ Node _p111 []
-                          , Node _p112 []
-                          ]
-                      )
-                  ]
-              )
-          , Node
-              _p2
-              [ Node _p21 []
-                , Node _p22 []
-                ]
-          , Node p3 []
-          ] <-
-          submitConstitutionForest
-            SNothing
-            [ Node
-                ()
-                [ Node
-                    ()
-                    [ Node () []
-                    , Node () []
+    describe "Separated out for conformance mismatch" $ do
+      -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/913
+      -- TODO: Re-enable after issues are resolved, by removing this override
+      disableImpInitPostEpochBoundaryHook $ do
+        it "Subtrees are pruned for both enactment and expiry over multiple rounds" $ whenPostBootstrap $ do
+          committeeMembers' <- registerInitialCommittee
+          (dRep, _, _) <- setupSingleDRep 1_000_000
+          modifyPParams $ ppGovActionLifetimeL .~ EpochInterval 4
+          [ a@( Node
+                  p1
+                  [ b@( Node
+                          p11
+                          [ Node _p111 []
+                            , Node _p112 []
+                            ]
+                        )
                     ]
-                ]
+                )
             , Node
-                ()
-                [ Node () []
-                , Node () []
-                ]
-            , Node () []
-            ]
-        passNEpochs 2
-        submitYesVote_ (DRepVoter dRep) p1
-        submitYesVoteCCs_ committeeMembers' p1
-        submitYesVote_ (DRepVoter dRep) p11
-        submitYesVoteCCs_ committeeMembers' p11
-        submitYesVote_ (DRepVoter dRep) p3
-        submitYesVoteCCs_ committeeMembers' p3 -- Two competing proposals break the tie based on proposal order
-        passNEpochs 2
-        fmap (!! 3) getProposalsForest
-          `shouldReturn` SJust
-          <$> a
-        passEpoch -- ConstitutionPurpose is a delayed action
-        fmap (!! 3) getProposalsForest
-          `shouldReturn` SJust
-          <$> b
-        passNEpochs 2
-        fmap (!! 3) getProposalsForest
-          `shouldReturn` Node (SJust p11) []
-        c@[ Node _p113 []
-            , Node _p114 []
+                _p2
+                [ Node _p21 []
+                  , Node _p22 []
+                  ]
+            , Node p3 []
             ] <-
-          submitConstitutionForest
-            (SJust p11)
-            [ Node () []
-            , Node () []
-            ]
-        fmap (!! 3) getProposalsForest
-          `shouldReturn` Node (SJust p11) (fmap SJust <$> c)
-        passNEpochs 4
-        d@[ Node _p115 []
-            , Node p116 []
-            ] <-
-          submitConstitutionForest
-            (SJust p11)
-            [ Node () []
-            , Node () []
-            ]
-        fmap (!! 3) getProposalsForest
-          `shouldReturn` Node (SJust p11) (fmap SJust <$> (c <> d))
-        passNEpochs 2
-        fmap (!! 3) getProposalsForest
-          `shouldReturn` Node (SJust p11) (fmap SJust <$> d)
-        submitYesVote_ (DRepVoter dRep) p116
-        submitYesVoteCCs_ committeeMembers' p116
-        passNEpochs 3
-        fmap (!! 3) getProposalsForest
-          `shouldReturn` Node (SJust p116) []
+            submitConstitutionForest
+              SNothing
+              [ Node
+                  ()
+                  [ Node
+                      ()
+                      [ Node () []
+                      , Node () []
+                      ]
+                  ]
+              , Node
+                  ()
+                  [ Node () []
+                  , Node () []
+                  ]
+              , Node () []
+              ]
+          passNEpochs 2
+          submitYesVote_ (DRepVoter dRep) p1
+          submitYesVoteCCs_ committeeMembers' p1
+          submitYesVote_ (DRepVoter dRep) p11
+          submitYesVoteCCs_ committeeMembers' p11
+          submitYesVote_ (DRepVoter dRep) p3
+          submitYesVoteCCs_ committeeMembers' p3 -- Two competing proposals break the tie based on proposal order
+          passNEpochs 2
+          fmap (!! 3) getProposalsForest
+            `shouldReturn` SJust
+            <$> a
+          passEpoch -- ConstitutionPurpose is a delayed action
+          fmap (!! 3) getProposalsForest
+            `shouldReturn` SJust
+            <$> b
+          passNEpochs 2
+          fmap (!! 3) getProposalsForest
+            `shouldReturn` Node (SJust p11) []
+          c@[ Node _p113 []
+              , Node _p114 []
+              ] <-
+            submitConstitutionForest
+              (SJust p11)
+              [ Node () []
+              , Node () []
+              ]
+          fmap (!! 3) getProposalsForest
+            `shouldReturn` Node (SJust p11) (fmap SJust <$> c)
+          passNEpochs 4
+          d@[ Node _p115 []
+              , Node p116 []
+              ] <-
+            submitConstitutionForest
+              (SJust p11)
+              [ Node () []
+              , Node () []
+              ]
+          fmap (!! 3) getProposalsForest
+            `shouldReturn` Node (SJust p11) (fmap SJust <$> (c <> d))
+          passNEpochs 2
+          fmap (!! 3) getProposalsForest
+            `shouldReturn` Node (SJust p11) (fmap SJust <$> d)
+          submitYesVote_ (DRepVoter dRep) p116
+          submitYesVoteCCs_ committeeMembers' p116
+          passNEpochs 3
+          fmap (!! 3) getProposalsForest
+            `shouldReturn` Node (SJust p116) []
       it "Votes from subsequent epochs are considered for ratification" $ whenPostBootstrap $ do
         modifyPParams $ ppGovActionLifetimeL .~ EpochInterval 4
 
