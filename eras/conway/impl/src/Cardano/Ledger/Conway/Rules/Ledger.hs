@@ -40,7 +40,6 @@ import Cardano.Ledger.BaseTypes (
   Relation (..),
   ShelleyBase,
   StrictMaybe (..),
-  networkId,
   swapMismatch,
   unswapMismatch,
  )
@@ -73,8 +72,7 @@ import Cardano.Ledger.Conway.Rules.Certs (
   CertsEnv (CertsEnv),
   ConwayCertsEvent (..),
   ConwayCertsPredFailure (..),
-  updateDormantDRepExpiries,
-  updateVotingDRepExpiries,
+  updateDRepExpiriesAndDrainWithdrawals,
  )
 import Cardano.Ledger.Conway.Rules.Deleg (ConwayDelegPredFailure)
 import Cardano.Ledger.Conway.Rules.Gov (
@@ -110,9 +108,10 @@ import Cardano.Ledger.Shelley.Rules (
 import Cardano.Ledger.Slot (epochFromSlot)
 import Control.DeepSeq (NFData)
 import Control.Monad (unless)
-import Control.Monad.Trans.Reader (asks)
 import Control.State.Transition.Extended (
   Embed (..),
+  Rule,
+  RuleType (Transition),
   STS (..),
   TRC (..),
   TransitionRule,
@@ -426,24 +425,13 @@ ledgerTransition = do
 
         certState' <-
           if hardforkConwayMoveWithdrawalsAndDRepChecksToLedgerRule $ pp ^. ppProtocolVersionL
-            then do
-              network <- liftSTS $ asks networkId
-              let accounts = certState ^. certDStateL . accountsL
-                  withdrawals = tx ^. bodyTxL . withdrawalsTxBodyL
-                  (invalidWithdrawals, incompleteWithdrawals) =
-                    case withdrawalsThatDoNotDrainAccounts withdrawals network accounts of
-                      Nothing -> (Nothing, Nothing)
-                      Just (invalid, incomplete) ->
-                        ( if null invalid then Nothing else Just invalid
-                        , if null incomplete then Nothing else Just incomplete
-                        )
-              failOnJust invalidWithdrawals (ConwayWithdrawalsMissingAccounts . Withdrawals)
-              failOnJust incompleteWithdrawals (ConwayIncompleteWithdrawals . Withdrawals)
-              pure $
+            then
+              updateDRepExpiriesAndDrainWithdrawals @(someLEDGER era)
+                curEpochNo
+                pp
                 certState
-                  & updateDormantDRepExpiries tx curEpochNo
-                  & updateVotingDRepExpiries tx curEpochNo (pp ^. ppDRepActivityL)
-                  & certDStateL . accountsL %~ drainAccounts withdrawals
+                tx
+                processBadWithdrawalsLEDGER
             else pure certState
 
         certStateAfterCERTS <-
@@ -493,6 +481,22 @@ ledgerTransition = do
         , tx
         )
   pure $ LedgerState utxoState'' certStateAfterCERTS
+
+processBadWithdrawalsLEDGER ::
+  forall (someLEDGER :: Type -> Type) era.
+  PredicateFailure (someLEDGER era) ~ ConwayLedgerPredFailure era =>
+  Maybe (Map.Map RewardAccount Coin, Map.Map RewardAccount Coin) ->
+  Rule (someLEDGER era) 'Transition ()
+processBadWithdrawalsLEDGER badWithdrawals = do
+  let (invalidWithdrawals, incompleteWithdrawals) =
+        case badWithdrawals of
+          Nothing -> (Nothing, Nothing)
+          Just (invalid, incomplete) ->
+            ( if null invalid then Nothing else Just invalid
+            , if null incomplete then Nothing else Just incomplete
+            )
+  failOnJust invalidWithdrawals (ConwayWithdrawalsMissingAccounts . Withdrawals)
+  failOnJust incompleteWithdrawals (ConwayIncompleteWithdrawals . Withdrawals)
 
 instance
   ( BaseM (ConwayUTXOW era) ~ ShelleyBase

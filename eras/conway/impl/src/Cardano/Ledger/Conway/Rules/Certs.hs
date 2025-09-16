@@ -25,8 +25,10 @@ module Cardano.Ledger.Conway.Rules.Certs (
   updateDormantDRepExpiry,
   updateDormantDRepExpiries,
   updateVotingDRepExpiries,
+  updateDRepExpiriesAndDrainWithdrawals,
 ) where
 
+import Cardano.Ledger.Address (RewardAccount)
 import Cardano.Ledger.BaseTypes (
   EpochInterval,
   EpochNo (EpochNo),
@@ -44,6 +46,7 @@ import Cardano.Ledger.Binary.Coders (
   (!>),
   (<!),
  )
+import Cardano.Ledger.Coin (Coin)
 import Cardano.Ledger.Conway.Core
 import Cardano.Ledger.Conway.Era (
   ConwayCERT,
@@ -69,6 +72,8 @@ import Control.DeepSeq (NFData)
 import Control.Monad.Trans.Reader (asks)
 import Control.State.Transition.Extended (
   Embed (..),
+  Rule,
+  RuleType (Transition),
   STS (..),
   TRC (..),
   TransitionRule,
@@ -204,6 +209,42 @@ instance
 
   transitionRules = [conwayCertsTransition @era]
 
+processBadWithdrawalsCERTS ::
+  Maybe (Map.Map RewardAccount Coin, Map.Map RewardAccount Coin) ->
+  Rule (ConwayCERTS era) 'Transition ()
+processBadWithdrawalsCERTS badWithdrawals =
+  failOnJust
+    badWithdrawals
+    ( \(invalid, incomplete) ->
+        WithdrawalsNotInRewardsCERTS $ Withdrawals $ invalid <> incomplete
+    )
+
+updateDRepExpiriesAndDrainWithdrawals ::
+  forall rule era.
+  ( EraTx era
+  , ConwayEraTxBody era
+  , ConwayEraCertState era
+  , BaseM rule ~ ShelleyBase
+  , STS rule
+  ) =>
+  EpochNo ->
+  PParams era ->
+  CertState era ->
+  Tx era ->
+  (Maybe (Map.Map RewardAccount Coin, Map.Map RewardAccount Coin) -> Rule rule 'Transition ()) ->
+  Rule rule 'Transition (CertState era)
+updateDRepExpiriesAndDrainWithdrawals currentEpoch pp certState tx processBadWithdrawals = do
+  network <- liftSTS $ asks networkId
+  let accounts = certState ^. certDStateL . accountsL
+      withdrawals = tx ^. bodyTxL . withdrawalsTxBodyL
+      badWithdrawals = withdrawalsThatDoNotDrainAccounts withdrawals network accounts
+  processBadWithdrawals badWithdrawals
+  pure $
+    certState
+      & updateDormantDRepExpiries tx currentEpoch
+      & updateVotingDRepExpiries tx currentEpoch (pp ^. ppDRepActivityL)
+      & certDStateL . accountsL %~ drainAccounts withdrawals
+
 conwayCertsTransition ::
   forall era.
   ( EraTx era
@@ -227,20 +268,7 @@ conwayCertsTransition = do
     Empty ->
       if hardforkConwayMoveWithdrawalsAndDRepChecksToLedgerRule $ pp ^. ppProtocolVersionL
         then pure certState
-        else do
-          network <- liftSTS $ asks networkId
-          let accounts = certState ^. certDStateL . accountsL
-              withdrawals = tx ^. bodyTxL . withdrawalsTxBodyL
-          failOnJust
-            (withdrawalsThatDoNotDrainAccounts withdrawals network accounts)
-            ( \(invalid, incomplete) ->
-                WithdrawalsNotInRewardsCERTS $ Withdrawals $ invalid <> incomplete
-            )
-          pure $
-            certState
-              & updateDormantDRepExpiries tx currentEpoch
-              & updateVotingDRepExpiries tx currentEpoch (pp ^. ppDRepActivityL)
-              & certDStateL . accountsL %~ drainAccounts withdrawals
+        else updateDRepExpiriesAndDrainWithdrawals currentEpoch pp certState tx processBadWithdrawalsCERTS
     gamma :|> txCert -> do
       certState' <-
         trans @(ConwayCERTS era) $ TRC (env, certState, gamma)
