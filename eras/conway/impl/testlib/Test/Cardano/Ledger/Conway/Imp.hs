@@ -159,5 +159,4 @@ conwayEraSpecificSpec = do
 instance EraSpecificSpec ConwayEra where
   eraSpecificSpec =
     AlonzoImp.alonzoEraSpecificSpec
-      >> BabbageImp.babbageEraSpecificSpec
       >> conwayEraSpecificSpec
