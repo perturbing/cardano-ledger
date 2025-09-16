@@ -50,6 +50,7 @@ import Test.Cardano.Ledger.Plutus.Examples
 spec ::
   forall era.
   ( AlonzoEraImp era
+  , InjectRuleFailure "LEDGER" ShelleyDelegPredFailure era
   , InjectRuleFailure "LEDGER" AlonzoUtxosPredFailure era
   ) =>
   SpecWith (ImpInit (LedgerSpec era))
@@ -90,6 +91,21 @@ spec = describe "Valid transactions" $ do
             mkBasicTx $
               mkBasicTxBody & inputsTxBodyL .~ [txIn]
 
+        it "Validating CERT script" $ do
+          txIn <- produceScript alwaysSucceedsWithDatumHash
+          txCert <- genRegTxCert $ ScriptHashObj alwaysSucceedsNoDatumHash
+          submitTx_ $
+            mkBasicTx $
+              mkBasicTxBody
+                & inputsTxBodyL .~ [txIn]
+                & certsTxBodyL .~ [txCert]
+
+        it "Validating WITHDRAWAL script" $ do
+          account <- registerStakeCredential $ ScriptHashObj alwaysSucceedsNoDatumHash
+          submitTx_ $
+            mkBasicTx $
+              mkBasicTxBody & withdrawalsTxBodyL .~ Withdrawals [(account, mempty)]
+
         it "Validating MINT script" $ do
           submitTx_ =<< mkTokenMintingTx alwaysSucceedsNoDatumHash
 
@@ -117,11 +133,27 @@ spec = describe "Valid transactions" $ do
                 & witsTxL . datsTxWitsL . unTxDatsL %~ Map.insert datumHash datum
           submitTx_ tx
 
+        it "Multiple identical certificates" $ do
+          let scriptHash = alwaysSucceedsNoDatumHash
+          void . registerStakeCredential $ ScriptHashObj scriptHash
+          txCerts <- mapM (genUnRegTxCert . ScriptHashObj) (replicate 2 scriptHash)
+          let tx =
+                mkBasicTx mkBasicTxBody
+                  & bodyTxL . certsTxBodyL .~ fromList txCerts
+          if eraProtVerLow @era < natVersion @9
+            then
+              -- This passes UTXOW rules but not DELEG rules; however, we care about only UTXOW rules here
+              submitFailingTx
+                tx
+                [injectFailure $ StakeKeyNotRegisteredDELEG (ScriptHashObj scriptHash)]
+            else
+              -- Conway fixed the bug that was causing DELEG to fail
+              submitTx_ tx
+
 alonzoEraSpecificSpec ::
   forall era.
   ( AlonzoEraImp era
   , ShelleyEraTxCert era
-  , InjectRuleFailure "LEDGER" ShelleyDelegPredFailure era
   , InjectRuleFailure "LEDGER" AlonzoUtxosPredFailure era
   ) =>
   SpecWith (ImpInit (LedgerSpec era))
@@ -135,29 +167,14 @@ alonzoEraSpecificSpec = do
           alwaysFailsWithDatumHash = hashPlutusScript $ alwaysFailsWithDatum slang :: ScriptHash
           alwaysFailsNoDatumHash = hashPlutusScript $ alwaysFailsNoDatum slang :: ScriptHash
 
-        it "Validating CERT script" $ do
-          txIn <- produceScript alwaysSucceedsWithDatumHash
-          let txCert = RegTxCert $ ScriptHashObj alwaysSucceedsNoDatumHash
-          submitTx_ $
-            mkBasicTx $
-              mkBasicTxBody
-                & inputsTxBodyL .~ [txIn]
-                & certsTxBodyL .~ [txCert]
-
         it "Not validating CERT script" $ do
           txIn <- produceScript alwaysFailsWithDatumHash
-          let txCert = RegTxCert $ ScriptHashObj alwaysSucceedsNoDatumHash
+          txCert <- genRegTxCert $ ScriptHashObj alwaysSucceedsNoDatumHash
           submitPhase2Invalid_ $
             mkBasicTx $
               mkBasicTxBody
                 & inputsTxBodyL .~ [txIn]
                 & certsTxBodyL .~ [txCert]
-
-        it "Validating WITHDRAWAL script" $ do
-          account <- registerStakeCredential $ ScriptHashObj alwaysSucceedsNoDatumHash
-          submitTx_ $
-            mkBasicTx $
-              mkBasicTxBody & withdrawalsTxBodyL .~ Withdrawals [(account, mempty)]
 
         it "Not validating WITHDRAWAL script" $ do
           account <- registerStakeCredentialNoDeposit $ ScriptHashObj alwaysFailsNoDatumHash
@@ -202,22 +219,6 @@ alonzoEraSpecificSpec = do
                 & certsTxBodyL .~ fromList (UnRegTxCert . ScriptHashObj <$> rewardScriptHashes)
                 & outputsTxBodyL .~ [txOut]
           submitTx_ $ mkBasicTx txBody
-
-        it "Multiple identical certificates" $ do
-          let scriptHash = alwaysSucceedsNoDatumHash
-          void . registerStakeCredential $ ScriptHashObj scriptHash
-          let tx =
-                mkBasicTx mkBasicTxBody
-                  & bodyTxL . certsTxBodyL .~ fromList (UnRegTxCert . ScriptHashObj <$> replicate 2 scriptHash)
-          if eraProtVerLow @era < natVersion @9
-            then
-              -- This passes UTXOW rules but not DELEG rules; however, we care about only UTXOW rules here
-              submitFailingTx
-                tx
-                [injectFailure $ StakeKeyNotRegisteredDELEG (ScriptHashObj scriptHash)]
-            else
-              -- Conway fixed the bug that was causing DELEG to fail
-              submitTx_ tx
   where
     -- NOTE: certain tests somehow require certificates without deposits
     -- otherwise, they will yield a Plutus failure
