@@ -794,17 +794,22 @@ votingSpec =
       submitTx_ $ mkBasicTx (mkBasicTxBody & certsTxBodyL .~ [UnRegDRepTxCert dRepCred deposit])
       gasAfterRemoval <- getGovActionState gaId
       gasDRepVotes gasAfterRemoval `shouldBe` []
-    it "expired gov-actions" $ do
-      -- Voting for expired actions should fail
-      modifyPParams $ ppGovActionLifetimeL .~ EpochInterval 2
-      (drep, _, _) <- setupSingleDRep 1_000_000
-      govActionId <- mkProposal InfoAction >>= submitProposal
-      passNEpochs 3
-      submitFailingVote
-        (DRepVoter drep)
-        govActionId
-        [ injectFailure $ VotingOnExpiredGovAction [(DRepVoter drep, govActionId)]
-        ]
+
+    describe "Separated out for conformance mismatch" $ do
+      -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/914
+      -- TODO: Re-enable after issues are resolved, by removing this override
+      disableImpInitPostEpochBoundaryHook $ do
+        it "expired gov-actions" $ do
+          -- Voting for expired actions should fail
+          modifyPParams $ ppGovActionLifetimeL .~ EpochInterval 2
+          (drep, _, _) <- setupSingleDRep 1_000_000
+          govActionId <- mkProposal InfoAction >>= submitProposal
+          passNEpochs 3
+          submitFailingVote
+            (DRepVoter drep)
+            govActionId
+            [ injectFailure $ VotingOnExpiredGovAction [(DRepVoter drep, govActionId)]
+            ]
     it "non-existent gov-actions" $ do
       (drep, _, _) <- setupSingleDRep 1_000_000
       govActionId <- mkProposal InfoAction >>= submitProposal
@@ -837,57 +842,61 @@ votingSpec =
           ]
     it "committee member mixed with other voters can not vote on UpdateCommittee action" $
       whenPostBootstrap ccVoteOnConstitutionFailsWithMultipleVotes
-    it "CC cannot ratify if below threshold" $ whenPostBootstrap $ do
-      modifyPParams $ \pp ->
-        pp
-          & ppGovActionLifetimeL .~ EpochInterval 3
-          & ppCommitteeMinSizeL .~ 2
-      (dRepCred, _, _) <- setupSingleDRep 1_000_000
-      (spoC, _, _) <- setupPoolWithStake $ Coin 42_000_000
-      ccColdCred0 <- KeyHashObj <$> freshKeyHash
-      ccColdCred1 <- KeyHashObj <$> freshKeyHash
-      electionGovAction <-
-        submitUpdateCommittee
-          Nothing
-          mempty
-          [ (ccColdCred0, EpochInterval 10)
-          , (ccColdCred1, EpochInterval 10)
-          ]
-          (3 %! 5)
-      submitYesVote_ (DRepVoter dRepCred) electionGovAction
-      submitYesVote_ (StakePoolVoter spoC) electionGovAction
-      logAcceptedRatio electionGovAction
-      passNEpochs 3
-      expectNoCurrentProposals
-      ccHotKey0 <- registerCommitteeHotKey ccColdCred0
-      ccHotKey1 <- registerCommitteeHotKey ccColdCred1
-      anchor <- arbitrary
-      constitutionChangeId <-
-        submitGovAction $
-          NewConstitution
-            SNothing
-            Constitution
-              { constitutionScript = SNothing
-              , constitutionAnchor = anchor
-              }
-      submitYesVote_ (DRepVoter dRepCred) constitutionChangeId
-      submitYesVote_ (CommitteeVoter ccHotKey0) constitutionChangeId
-      _ <- resignCommitteeColdKey ccColdCred0 SNothing
-      submitYesVote_ (CommitteeVoter ccHotKey1) constitutionChangeId
-      passEpoch
-      logAcceptedRatio constitutionChangeId
-      logToExpr =<< lookupGovActionState constitutionChangeId
-      passNEpochs 4
-      conAnchor <-
-        getsNES $
-          nesEsL
-            . esLStateL
-            . lsUTxOStateL
-            . utxosGovStateL
-            . cgsConstitutionL
-            . constitutionAnchorL
-      expectNoCurrentProposals
-      conAnchor `shouldNotBe` anchor
+    describe "Separated out for conformance mismatch" $ do
+      -- https://github.com/IntersectMBO/formal-ledger-specifications/issues/915
+      -- TODO: Re-enable after issues are resolved, by removing this override
+      disableImpInitPostEpochBoundaryHook $ do
+        it "CC cannot ratify if below threshold" $ whenPostBootstrap $ do
+          modifyPParams $ \pp ->
+            pp
+              & ppGovActionLifetimeL .~ EpochInterval 3
+              & ppCommitteeMinSizeL .~ 2
+          (dRepCred, _, _) <- setupSingleDRep 1_000_000
+          (spoC, _, _) <- setupPoolWithStake $ Coin 42_000_000
+          ccColdCred0 <- KeyHashObj <$> freshKeyHash
+          ccColdCred1 <- KeyHashObj <$> freshKeyHash
+          electionGovAction <-
+            submitUpdateCommittee
+              Nothing
+              mempty
+              [ (ccColdCred0, EpochInterval 10)
+              , (ccColdCred1, EpochInterval 10)
+              ]
+              (3 %! 5)
+          submitYesVote_ (DRepVoter dRepCred) electionGovAction
+          submitYesVote_ (StakePoolVoter spoC) electionGovAction
+          logAcceptedRatio electionGovAction
+          passNEpochs 3
+          expectNoCurrentProposals
+          ccHotKey0 <- registerCommitteeHotKey ccColdCred0
+          ccHotKey1 <- registerCommitteeHotKey ccColdCred1
+          anchor <- arbitrary
+          constitutionChangeId <-
+            submitGovAction $
+              NewConstitution
+                SNothing
+                Constitution
+                  { constitutionScript = SNothing
+                  , constitutionAnchor = anchor
+                  }
+          submitYesVote_ (DRepVoter dRepCred) constitutionChangeId
+          submitYesVote_ (CommitteeVoter ccHotKey0) constitutionChangeId
+          _ <- resignCommitteeColdKey ccColdCred0 SNothing
+          submitYesVote_ (CommitteeVoter ccHotKey1) constitutionChangeId
+          passEpoch
+          logAcceptedRatio constitutionChangeId
+          logToExpr =<< lookupGovActionState constitutionChangeId
+          passNEpochs 4
+          conAnchor <-
+            getsNES $
+              nesEsL
+                . esLStateL
+                . lsUTxOStateL
+                . utxosGovStateL
+                . cgsConstitutionL
+                . constitutionAnchorL
+          expectNoCurrentProposals
+          conAnchor `shouldNotBe` anchor
     it "can submit SPO votes" $ do
       spoHash <- freshKeyHash
       registerPoolWithDeposit spoHash
